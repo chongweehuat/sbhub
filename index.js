@@ -1,69 +1,81 @@
+require('dotenv').config();
+
 const express = require('express');
 const axios = require('axios');
-const { createProxyMiddleware } = require('http-proxy-middleware');
-
 const app = express();
-const PORT = 6788;
-const HOST = '0.0.0.0';
 
-// Storyblok API configuration
-const STORYBLOK_API_TOKEN = 'H21xOvhGjQHp5kJXVOUsbwtt'; // Replace with your Storyblok API token
-const STORYBLOK_WEBSITEMAP_FOLDER = 'websitemap'; // The folder containing website configurations
+// Fetch the Storyblok API token from the environment
+const STORYBLOK_API_TOKEN = process.env.STORYBLOK_API_TOKEN;
+
+// Load the website map from Storyblok
 let websiteMap = {};
 
-// Function to load the website map from Storyblok
-async function loadWebsiteMap() {
+const loadWebsiteMap = async () => {
   try {
     const response = await axios.get(
-      `https://api.storyblok.com/v2/cdn/stories/websitemap/websites?token=${STORYBLOK_API_TOKEN}`
+      `https://api.storyblok.com/v2/cdn/stories/settings/websitemap/websites?token=${STORYBLOK_API_TOKEN}`
     );
-    //console.log(response.data.story.content);
-    // Parse the response and construct the website map
     websiteMap = response.data.story.content.items.reduce((map, story) => {
-      const {developmentURL, productionURL} = story;
+      const { developmentURL, productionURL } = story;
       map[story.folder] = { developmentURL, productionURL };
       return map;
     }, {});
-
-    //console.log('Website map loaded:', websiteMap);
+    console.log("Website map loaded:", websiteMap);
   } catch (error) {
-    console.error('Error loading website map from Storyblok:', error.message);
+    console.error("Failed to load website map:", error);
   }
-}
+};
 
-// Load the website map at server startup
+// Load the website map at startup
 loadWebsiteMap();
 
-// Middleware to handle proxy requests
-app.use('/:environment/:website/*', async (req, res, next) => {
-  const { environment, website } = req.params; // Extract environment and website from URL
-  const contentPath = req.params[0]; // Get the remaining path (e.g., "home")
+// Middleware to proxy requests based on the website map
+app.use('/:environment/:language([a-z]{2}-[a-z]{2})?/:website/*', async (req, res, next) => {
+  const { environment, language, website } = req.params;
+  const remainingPath = req.params[0];
+
+  // Map the 'preview' environment to 'development'
+  const resolvedEnvironment = environment === 'preview' ? 'development' : environment;
 
   // Validate environment and website
-  if (!['preview', 'production'].includes(environment)) {
-    return res.status(400).send(`Invalid environment: ${environment}`);
+  if (!websiteMap[website]) {
+    return res.status(404).send(`Website '${website}' not found in the website map.`);
   }
 
-  const targetConfig = websiteMap[website];
-  if (!targetConfig) {
-    return res.status(404).send(`Website '${website}' not found.`);
+  const targetEnv = websiteMap[website][`${resolvedEnvironment}URL`];
+  if (!targetEnv) {
+    return res.status(400).send(`Invalid environment '${resolvedEnvironment}' for website '${website}'.`);
   }
 
-  // Determine the target URL based on the environment
-  const targetBaseUrl = environment === 'preview' ? targetConfig.developmentURL : targetConfig.productionURL;
+  // Construct the target URL
+  const targetURL = `${targetEnv}/${language ? language + '/' : ''}${website}/${remainingPath}`;
 
-  // Proxy the request directly to the target URL
-  createProxyMiddleware({
-    target: targetBaseUrl,
-    changeOrigin: true,
-    pathRewrite: {
-      [`^/${environment}/${website}`]: '' // Strip `/production/<website>` or `/preview/<website>` from the path
-    }
-  })(req, res, next);
+  console.log(`Proxying to ${targetURL}`);
+
+  // Proxy the request
+  try {
+    const proxyResponse = await axios({
+      method: req.method,
+      url: targetURL,
+      headers: {
+        'User-Agent': req.headers['user-agent'], // Include User-Agent
+        'Accept': req.headers['accept'], // Forward Accept header
+        'Content-Type': req.headers['content-type'], // Forward Content-Type
+      },
+      params: req.query, // Forward query parameters if any
+      data: req.body, // Forward request body for POST/PUT requests
+    });
+
+    res.status(proxyResponse.status).send(proxyResponse.data);
+  } catch (error) {
+    console.error("Proxy error:", error.response?.data || error.message);
+    res.status(error.response?.status || 500).send(error.response?.data || "Internal Server Error");
+  }
+
 });
 
 // Start the Express server
-app.listen(PORT, HOST, () => {
-  console.log(`Proxy server is running on http://${HOST}:${PORT}`);
-  console.log('Use "/preview/<website>" or "/production/<website>" to route requests.');
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Proxy server running on port ${PORT}`);
 });
