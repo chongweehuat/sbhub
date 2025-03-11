@@ -69,7 +69,9 @@ app.use('/:environment/:language([a-z]{2}-[a-z]{2})?/:website/*', async (req, re
     res.status(proxyResponse.status).send(proxyResponse.data);
   } catch (error) {
     console.error("Proxy error:", error.response?.data || error.message);
-    res.status(error.response?.status || 500).send(error.response?.data || "Internal Server Error");
+    let errorMessage = error.response?.data || "Internal Server Error";
+    errorMessage += ` Target URL: ${targetURL}`; // Append targetURL to the error message.
+    res.status(error.response?.status || 500).send(errorMessage);
   }
 
 });
