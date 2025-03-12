@@ -29,10 +29,10 @@ const loadWebsiteMap = async () => {
 // Load the website map at startup
 loadWebsiteMap();
 
-// Middleware to proxy requests based on the website map
-app.use('/:environment/:language([a-z]{2}-[a-z]{2})?/:website/*', async (req, res, next) => {
+// Redirect route
+app.use('/:environment/:language([a-z]{2}-[a-z]{2})?/:website/*', (req, res, next) => {
   const { environment, language, website } = req.params;
-  const remainingPath = req.params[0];
+  const remainingPath = req.params[0]; // e.g., "aboutus"
 
   // Map the 'preview' environment to 'development'
   const resolvedEnvironment = environment === 'preview' ? 'development' : environment;
@@ -47,37 +47,23 @@ app.use('/:environment/:language([a-z]{2}-[a-z]{2})?/:website/*', async (req, re
     return res.status(400).send(`Invalid environment '${resolvedEnvironment}' for website '${website}'.`);
   }
 
-  // Construct the target URL
-  const targetURL = `${targetEnv}/${language ? language + '/' : ''}${website}/${remainingPath}`;
+  // Construct the target URL for redirection
+  let targetURL = `${targetEnv}/${language ? language + '/' : ''}${website}/${remainingPath}`;
 
-  console.log(`Proxying to ${targetURL}`);
-
-  // Proxy the request
-  try {
-    const proxyResponse = await axios({
-      method: req.method,
-      url: targetURL,
-      headers: {
-        'User-Agent': req.headers['user-agent'], // Include User-Agent
-        'Accept': req.headers['accept'], // Forward Accept header
-        'Content-Type': req.headers['content-type'], // Forward Content-Type
-      },
-      params: req.query, // Forward query parameters if any
-      data: req.body, // Forward request body for POST/PUT requests
-    });
-
-    res.status(proxyResponse.status).send(proxyResponse.data);
-  } catch (error) {
-    console.error("Proxy error:", error.response?.data || error.message);
-    let errorMessage = error.response?.data || "Internal Server Error";
-    errorMessage += ` Target URL: ${targetURL}`; // Append targetURL to the error message.
-    res.status(error.response?.status || 500).send(errorMessage);
+  // Append query strings if they exist
+  const queryString = new URLSearchParams(req.query).toString();
+  if (queryString) {
+    targetURL += `?${queryString}`;
   }
 
+  //console.log(`Redirecting to ${targetURL}`);
+
+  // Perform a 302 redirect
+  res.redirect(302, targetURL);
 });
 
 // Start the Express server
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 6788; // Use port 6788 as specified
 app.listen(PORT, () => {
-  console.log(`Proxy server running on port ${PORT}`);
+  console.log(`Redirect server running on port ${PORT}`);
 });
